@@ -29,4 +29,4 @@ else
 fi
 
 open -a Finicky
-echo "Done. Open Finicky once and let it be your default browser, then click any link."
+echo "Done. Let Finicky be your default browser, then close its window (it would otherwise show up with every link). Then click any link."
