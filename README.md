@@ -22,7 +22,7 @@ cd finicky-picker
 ./install.sh --browser "Google Chrome"  # or pick one
 ```
 
-Then open Finicky once and let it become your default browser.
+Then open Finicky once, let it become your default browser, and close its window. If that window stays open, it comes up next to the picker on every link.
 
 If you already have a `~/.finicky.js`, the installer backs it up to `~/.finicky.js.bak` and writes a new one; copy your old rules into the new file's handlers.
 
