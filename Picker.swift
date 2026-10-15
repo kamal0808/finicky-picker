@@ -1,9 +1,9 @@
-// Finicky sends links it has no rule for here. Pick a browser profile;
-// the choice opens the link and, if ticked, is saved so the site never asks again.
+// The default browser. A link to a saved site opens straight in its profile;
+// any other link (or any link while Option is held) shows a popup to pick one.
 import AppKit
 
 struct Browser {
-    let name: String       // app name, as Finicky and `open -a` know it
+    let name: String       // app name, as `open -a` knows it
     let bundleId: String
     let support: String    // folder holding "Local State"
 }
@@ -15,9 +15,14 @@ let browsers = [
 
 let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
 let finickyConfig = home + "/.finicky.js"
+let storeDir = home + "/Library/Application Support/Finicky Picker"
+let sitesFile = storeDir + "/sites.json"
 
-// The browser named in ~/.finicky.js (`const pickerBrowser = "...";`), else the first one installed.
+// `defaults write social.topc.finicky-picker browser "Google Chrome"`, else the one an old
+// ~/.finicky.js named (`const pickerBrowser = "...";`), else the first one installed.
 let browser: Browser = {
+    if let name = UserDefaults.standard.string(forKey: "browser"),
+       let b = browsers.first(where: { $0.name == name }) { return b }
     if let src = try? String(contentsOfFile: finickyConfig, encoding: .utf8),
        let m = src.range(of: #"const pickerBrowser = "([^"]+)""#, options: .regularExpression) {
         let name = src[m].split(separator: "\"")[1]
@@ -31,9 +36,59 @@ let cometResources = "/Applications/Comet.app/Contents/Frameworks/Comet Framewor
 // Resource ids of Comet's avatar art, found by dumping its packs (Comet 154).
 // Picked avatars: IDR_PROFILE_AVATAR_N is id avatarBaseId + N in chrome_200_percent.pak.
 // The default avatar is a separate image in chrome_100_percent.pak.
-let learnScript = Bundle.main.path(forResource: "learn", ofType: "py") ?? ""
 let avatarBaseId = 14386
 let defaultAvatarId = 338
+
+// Saved sites: domain -> profile name. A domain also covers its subdomains.
+func loadSites() -> [String: String] {
+    guard let d = FileManager.default.contents(atPath: sitesFile),
+          let json = try? JSONSerialization.jsonObject(with: d) as? [String: String] else { return [:] }
+    return json
+}
+
+func saveSites(_ sites: [String: String]) {
+    try? FileManager.default.createDirectory(atPath: storeDir, withIntermediateDirectories: true)
+    if let d = try? JSONSerialization.data(withJSONObject: sites, options: [.prettyPrinted, .sortedKeys]) {
+        try? d.write(to: URL(fileURLWithPath: sitesFile), options: .atomic)
+    }
+}
+
+// First run: bring over the sites an older Finicky-based setup saved in ~/.finicky.js.
+func migrateFromFinicky() {
+    guard !FileManager.default.fileExists(atPath: sitesFile) else { return }
+    var sites: [String: String] = [:]
+    if let src = try? String(contentsOfFile: finickyConfig, encoding: .utf8),
+       let a = src.range(of: "const learned = "), let b = src.range(of: ";\n// learned:end"),
+       let json = try? JSONSerialization.jsonObject(with: Data(src[a.upperBound..<b.lowerBound].utf8)) as? [String: String] {
+        sites = json
+    }
+    saveSites(sites)
+}
+
+// "https://www.App.Example.com/x" or "*.example.com" -> "app.example.com" / "example.com".
+func siteName(_ s: String) -> String {
+    var h = s.trimmingCharacters(in: .whitespaces).lowercased()
+    if let u = URL(string: h), let host = u.host { h = host }
+    else if let u = URL(string: "https://" + h), let host = u.host { h = host }
+    for prefix in ["*.", "www."] where h.hasPrefix(prefix) { h.removeFirst(prefix.count) }
+    return h
+}
+
+// The saved site covering this host: itself or its closest parent domain.
+func savedMatch(_ host: String, in sites: [String: String]) -> (site: String, profile: String)? {
+    var h = host
+    while !h.isEmpty {
+        if let p = sites[h] { return (h, p) }
+        guard let dot = h.firstIndex(of: ".") else { break }
+        h = String(h[h.index(after: dot)...])
+    }
+    return nil
+}
+
+func isDefaultBrowser() -> Bool {
+    NSWorkspace.shared.urlForApplication(toOpen: URL(string: "https://example.com")!)?.standardizedFileURL
+        == Bundle.main.bundleURL.standardizedFileURL
+}
 
 struct Profile {
     let dir: String
@@ -127,15 +182,15 @@ final class Picker: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var remember: NSButton!
     var savedLabel: NSTextField!
     var profiles: [Profile] = []
+    var savedSite: String?
     var gotURL = false
+    var pending: [String] = []
     var manager: NSWindow?
-
-    func applicationWillFinishLaunching(_ n: Notification) {
-        NSAppleEventManager.shared().setEventHandler(self, andSelector: #selector(handleURL(_:reply:)),
-            forEventClass: AEEventClass(kInternetEventClass), andEventID: AEEventID(kAEGetURL))
-    }
+    var addField: NSTextField?
+    var addPop: NSPopUpButton?
 
     func applicationDidFinishLaunching(_ n: Notification) {
+        migrateFromFinicky()
         let args = CommandLine.arguments
         if let i = args.firstIndex(of: "--preview"), i + 1 < args.count {
             show(url: "https://example.com/some/page", preview: args[i + 1])
@@ -149,16 +204,36 @@ final class Picker: NSObject, NSApplicationDelegate, NSWindowDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { if !self.gotURL && self.panel == nil { self.showManager(preview: nil) } }
     }
 
-    @objc func handleURL(_ event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
-        guard let s = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue else { return }
+    // Links (and .html files) sent to us as the default browser.
+    func application(_ app: NSApplication, open urls: [URL]) {
         gotURL = true
-        show(url: s, preview: nil)
+        let forcePicker = NSEvent.modifierFlags.contains(.option)
+        let sites = loadSites()
+        let all = loadProfiles()
+        for u in urls {
+            if !forcePicker, let host = u.host.map(siteName), let m = savedMatch(host, in: sites),
+               let p = all.first(where: { $0.name == m.profile }) {
+                openInBrowser(u.absoluteString, p)
+            } else {
+                pending.append(u.absoluteString)
+            }
+        }
+        if panel == nil { next() }
     }
+
+    // Shows the popup for the next waiting link, or quits once nothing is left on screen.
+    func next() {
+        panel?.orderOut(nil)
+        panel = nil
+        if !pending.isEmpty { show(url: pending.removeFirst(), preview: nil) }
+        else if manager == nil { NSApp.terminate(nil) }
+    }
+
+    @objc func cancel() { next() }
 
     func show(url: String, preview: String?) {
         self.url = url
-        host = URL(string: url)?.host ?? ""
-        if host.hasPrefix("www.") { host.removeFirst(4) }
+        host = URL(string: url)?.host.map(siteName) ?? ""
         profiles = loadProfiles()
 
         let content = NSView()
@@ -179,8 +254,10 @@ final class Picker: NSObject, NSApplicationDelegate, NSWindowDelegate {
         remember.state = .off
         remember.font = .systemFont(ofSize: 12)
         var views: [NSView] = [title, sub, row, remember]
-        if let current = learned()[host] {
-            savedLabel = NSTextField(labelWithString: "Saved: \(host) always opens in \(current)")
+        savedSite = nil
+        if let m = savedMatch(host, in: loadSites()) {
+            savedSite = m.site
+            savedLabel = NSTextField(labelWithString: "Saved: \(m.site) always opens in \(m.profile)")
             savedLabel.font = .systemFont(ofSize: 12)
             savedLabel.textColor = .secondaryLabelColor
             let forget = NSButton(title: "Forget", target: self, action: #selector(forgetSaved(_:)))
@@ -190,11 +267,11 @@ final class Picker: NSObject, NSApplicationDelegate, NSWindowDelegate {
             savedRow.spacing = 8
             views.append(savedRow)
         }
-        let hint = NSTextField(labelWithString: "Press 1–\(profiles.count) · ⌥-click a link to change a saved site")
+        let hint = NSTextField(labelWithString: "Press 1–\(profiles.count) · hold ⌥ while clicking a link to change a saved site")
         hint.font = .systemFont(ofSize: 11)
         hint.textColor = .tertiaryLabelColor
 
-        let cancel = NSButton(title: "Cancel", target: NSApp, action: #selector(NSApplication.terminate(_:)))
+        let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancel))
         cancel.bezelStyle = .rounded
         cancel.keyEquivalent = "\u{1b}"
         let manage = NSButton(title: "Saved sites…", target: self, action: #selector(openManager))
@@ -259,7 +336,7 @@ final class Picker: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
         p.makeKey()
         // Nothing picked in 2 minutes: drop the link rather than leave a stray popup.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 120) { if self.manager == nil { NSApp.terminate(nil) } }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 120) { if self.panel === p { self.next() } }
     }
 
     func card(_ p: Profile, index: Int) -> NSView {
@@ -292,19 +369,14 @@ final class Picker: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return b
     }
 
-    // Reads the learned block from ~/.finicky.js (it is plain JSON between the markers).
-    func learned() -> [String: String] {
-        guard let src = try? String(contentsOfFile: finickyConfig, encoding: .utf8),
-              let a = src.range(of: "const learned = "), let b = src.range(of: ";\n// learned:end"),
-              let json = try? JSONSerialization.jsonObject(with: Data(src[a.upperBound..<b.lowerBound].utf8)) as? [String: String]
-        else { return [:] }
-        return json
-    }
-
     @objc func forgetSaved(_ sender: NSButton) {
-        run("/usr/bin/python3", [learnScript, "--forget", host])
-        savedLabel.stringValue = "Forgotten: \(host) will ask again"
+        guard let site = savedSite else { return }
+        var sites = loadSites()
+        sites[site] = nil
+        saveSites(sites)
+        savedLabel.stringValue = "Forgotten: \(site) will ask again"
         sender.isHidden = true
+        reloadManager()
     }
 
     @objc func picked(_ sender: NSButton) { choose(sender.tag) }
@@ -346,7 +418,7 @@ final class Picker: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func reloadManager() {
         guard let w = manager else { return }
-        let saved = learned().sorted { $0.key < $1.key }
+        let saved = loadSites().sorted { $0.key < $1.key }
         let names = profiles.map(\.name)
 
         let rows = NSStackView()
@@ -355,8 +427,8 @@ final class Picker: NSObject, NSApplicationDelegate, NSWindowDelegate {
         rows.spacing = 8
         rows.edgeInsets = NSEdgeInsets(top: 18, left: 20, bottom: 18, right: 20)
         let note = NSTextField(wrappingLabelWithString: saved.isEmpty
-            ? "No saved sites yet. Tick \"Always open this site this way\" in the picker to save one."
-            : "These sites skip the picker and open straight in the profile shown.")
+            ? "No saved sites yet. Tick \"Always open this site this way\" in the popup, or add one below."
+            : "These sites, and their subdomains, open straight in the profile shown.")
         note.font = .systemFont(ofSize: 12)
         note.textColor = .secondaryLabelColor
         note.preferredMaxLayoutWidth = 440
@@ -384,6 +456,35 @@ final class Picker: NSObject, NSApplicationDelegate, NSWindowDelegate {
             rows.addArrangedSubview(row)
         }
 
+        let field = NSTextField(string: addField?.stringValue ?? "")
+        field.placeholderString = "Add a site, e.g. example.com"
+        field.font = .systemFont(ofSize: 13)
+        field.widthAnchor.constraint(equalToConstant: 200).isActive = true
+        field.target = self
+        field.action = #selector(addSite)
+        let pop = NSPopUpButton(frame: .zero, pullsDown: false)
+        pop.addItems(withTitles: names)
+        let add = NSButton(title: "Add", target: self, action: #selector(addSite))
+        add.bezelStyle = .rounded
+        addField = field
+        addPop = pop
+        let addRow = NSStackView(views: [field, pop, add])
+        addRow.spacing = 10
+        if let last = rows.arrangedSubviews.last { rows.setCustomSpacing(16, after: last) }
+        rows.addArrangedSubview(addRow)
+
+        if !isDefaultBrowser() {
+            let note = NSTextField(wrappingLabelWithString: "Finicky Picker isn't your default browser yet, so links from other apps won't come here.")
+            note.font = .systemFont(ofSize: 12)
+            note.textColor = .secondaryLabelColor
+            note.preferredMaxLayoutWidth = 440
+            let make = NSButton(title: "Make default browser", target: self, action: #selector(makeDefault))
+            make.bezelStyle = .rounded
+            rows.setCustomSpacing(20, after: addRow)
+            rows.addArrangedSubview(note)
+            rows.addArrangedSubview(make)
+        }
+
         let content = NSView()
         rows.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(rows)
@@ -399,26 +500,63 @@ final class Picker: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc func changeSaved(_ sender: NSPopUpButton) {
         guard let site = sender.identifier?.rawValue, let profile = sender.titleOfSelectedItem else { return }
-        run("/usr/bin/python3", [learnScript, site, profile])
+        var sites = loadSites()
+        sites[site] = profile
+        saveSites(sites)
     }
 
     @objc func removeSaved(_ sender: NSButton) {
         guard let site = sender.identifier?.rawValue else { return }
-        run("/usr/bin/python3", [learnScript, "--forget", site])
+        var sites = loadSites()
+        sites[site] = nil
+        saveSites(sites)
         reloadManager()
     }
 
-    func windowWillClose(_ n: Notification) { NSApp.terminate(nil) }
+    @objc func addSite() {
+        guard let field = addField, let profile = addPop?.titleOfSelectedItem else { return }
+        let site = siteName(field.stringValue)
+        guard site.contains("."), !site.contains(" ") else { NSSound.beep(); return }
+        var sites = loadSites()
+        sites[site] = profile
+        saveSites(sites)
+        field.stringValue = ""
+        reloadManager()
+    }
+
+    @objc func makeDefault() {
+        guard #available(macOS 12.0, *) else { return }
+        let ws = NSWorkspace.shared, me = Bundle.main.bundleURL
+        // macOS asks the user to confirm; the window refreshes once both schemes are ours.
+        ws.setDefaultApplication(at: me, toOpenURLsWithScheme: "http") { _ in
+            ws.setDefaultApplication(at: me, toOpenURLsWithScheme: "https") { _ in
+                DispatchQueue.main.async { self.reloadManager() }
+            }
+        }
+    }
+
+    func windowWillClose(_ n: Notification) {
+        manager = nil
+        if panel == nil { NSApp.terminate(nil) }
+    }
 
     func choose(_ i: Int) {
         guard profiles.indices.contains(i) else { return }
         let p = profiles[i]
+        openInBrowser(url, p)
+        if remember.state == .on && !host.isEmpty {
+            var sites = loadSites()
+            sites[host] = p.name
+            saveSites(sites)
+            reloadManager()
+        }
+        next()
+    }
+
+    func openInBrowser(_ url: String, _ p: Profile) {
+        NSLog("Opening %@ in %@ profile %@", url, browser.name, p.name)
         run("/usr/bin/open", ["-na", browser.name, "--args", "--profile-directory=\(p.dir)", url])
         bringBrowserForward()
-        if remember.state == .on && !host.isEmpty {
-            run("/usr/bin/python3", [learnScript, host, p.name])
-        }
-        NSApp.terminate(nil)
     }
 
     // The browser sometimes opens the tab without coming forward, so hand focus to it explicitly.
@@ -444,7 +582,7 @@ final class KeyPanel: NSPanel {
     weak var picker: Picker?
     override var canBecomeKey: Bool { true }
     override func keyDown(with event: NSEvent) {
-        if event.keyCode == 53 { NSApp.terminate(nil); return }
+        if event.keyCode == 53 { picker?.next(); return }
         if let c = event.characters, let n = Int(c) { picker?.choose(n - 1); return }
         super.keyDown(with: event)
     }
