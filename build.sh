@@ -1,12 +1,22 @@
 #!/bin/sh
-# Builds "Profiley.app" into ~/Applications.
+# Builds "Profiley.app" into ~/Applications, or into the path given.
+# Pass --universal to build for both Apple silicon and Intel.
 set -e
 SRC="$(cd "$(dirname "$0")" && pwd)"
-APP="$HOME/Applications/Profiley.app"
-mkdir -p "$HOME/Applications"
+[ "$1" = "--universal" ] && { UNIVERSAL=1; shift; }
+APP="${1:-$HOME/Applications/Profiley.app}"
+mkdir -p "$(dirname "$APP")"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-swiftc -O -o "$APP/Contents/MacOS/Profiley" "$SRC/Profiley.swift"
+if [ -n "$UNIVERSAL" ]; then
+  TMP="$(mktemp -d)"
+  swiftc -O -target arm64-apple-macos12 -o "$TMP/arm64" "$SRC/Profiley.swift"
+  swiftc -O -target x86_64-apple-macos12 -o "$TMP/x86_64" "$SRC/Profiley.swift"
+  lipo -create "$TMP/arm64" "$TMP/x86_64" -output "$APP/Contents/MacOS/Profiley"
+  rm -rf "$TMP"
+else
+  swiftc -O -o "$APP/Contents/MacOS/Profiley" "$SRC/Profiley.swift"
+fi
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

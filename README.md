@@ -13,7 +13,17 @@ Works with Comet and Google Chrome.
 
 ## Install
 
-Needs macOS 12 or later with the Xcode command line tools (`xcode-select --install`):
+Needs macOS 12 or later.
+
+1. Download [Profiley.zip](https://github.com/kamal0808/profiley/releases/latest/download/Profiley.zip), unzip it and drag Profiley into Applications.
+2. Open it. macOS will say it can't check it for malware, because the app isn't notarized by Apple yet. Go to System Settings → Privacy & Security, scroll down and press "Open Anyway".
+3. The Saved sites window opens; press "Make default browser" and confirm.
+
+It uses Comet if installed, else Chrome. To use Chrome when you have both: `defaults write com.kamalkhatwani.profiley browser "Google Chrome"`, then open Profiley again.
+
+### Build from source
+
+Needs the Xcode command line tools (`xcode-select --install`):
 
 ```sh
 git clone https://github.com/kamal0808/profiley
@@ -22,7 +32,7 @@ cd profiley
 ./install.sh --browser "Google Chrome"  # or pick one
 ```
 
-The Saved sites window opens; press "Make default browser" and confirm. You can also pick it in System Settings → Desktop & Dock → Default web browser.
+Then press "Make default browser" as above. You can also pick it in System Settings → Desktop & Dock → Default web browser.
 
 Saved sites live in `~/Library/Application Support/Profiley/sites.json`.
 
