@@ -7,6 +7,7 @@ On a Mac, links from Slack, WhatsApp, Claude and other apps open in whichever br
 - A link from another app shows your profiles, with the same avatars as your browser. Click one or press 1, 2, 3.
 - Tick "Always open this site this way" and that site skips the popup from then on. Leave it unticked for sites you use in several profiles, like github.com.
 - Hold Option while clicking a link to get the popup again, to pick a different profile or press Forget on a saved site.
+- Open Finicky Picker from Spotlight (or press "Saved sites…" in the popup) to see every saved site, change which profile it opens in, or remove it.
 
 It works with [Finicky](https://github.com/johnste/finicky), which does the routing: sites you've saved, and any fixed rules you write, open straight away; everything else goes to the picker. Works with Comet and Google Chrome.
 

@@ -120,7 +120,7 @@ final class ProfileButton: NSButton {
     override func mouseExited(with event: NSEvent) { onHover?(false) }
 }
 
-final class Picker: NSObject, NSApplicationDelegate {
+final class Picker: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var panel: NSPanel?
     var url = ""
     var host = ""
@@ -128,6 +128,7 @@ final class Picker: NSObject, NSApplicationDelegate {
     var savedLabel: NSTextField!
     var profiles: [Profile] = []
     var gotURL = false
+    var manager: NSWindow?
 
     func applicationWillFinishLaunching(_ n: Notification) {
         NSAppleEventManager.shared().setEventHandler(self, andSelector: #selector(handleURL(_:reply:)),
@@ -140,7 +141,12 @@ final class Picker: NSObject, NSApplicationDelegate {
             show(url: "https://example.com/some/page", preview: args[i + 1])
             return
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { if !self.gotURL && self.panel == nil { NSApp.terminate(nil) } }
+        if let i = args.firstIndex(of: "--manage-preview"), i + 1 < args.count {
+            showManager(preview: args[i + 1])
+            return
+        }
+        // Opened by hand rather than by a link: show the saved sites.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { if !self.gotURL && self.panel == nil { self.showManager(preview: nil) } }
     }
 
     @objc func handleURL(_ event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
@@ -191,7 +197,12 @@ final class Picker: NSObject, NSApplicationDelegate {
         let cancel = NSButton(title: "Cancel", target: NSApp, action: #selector(NSApplication.terminate(_:)))
         cancel.bezelStyle = .rounded
         cancel.keyEquivalent = "\u{1b}"
-        views.append(cancel)
+        let manage = NSButton(title: "Saved sites…", target: self, action: #selector(openManager))
+        manage.bezelStyle = .inline
+        manage.controlSize = .small
+        let buttons = NSStackView(views: [cancel, manage])
+        buttons.spacing = 10
+        views.append(buttons)
         views.append(hint)
         let stack = NSStackView(views: views)
         stack.orientation = .vertical
@@ -248,7 +259,7 @@ final class Picker: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         p.makeKey()
         // Nothing picked in 2 minutes: drop the link rather than leave a stray popup.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 120) { NSApp.terminate(nil) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 120) { if self.manager == nil { NSApp.terminate(nil) } }
     }
 
     func card(_ p: Profile, index: Int) -> NSView {
@@ -297,6 +308,107 @@ final class Picker: NSObject, NSApplicationDelegate {
     }
 
     @objc func picked(_ sender: NSButton) { choose(sender.tag) }
+
+    @objc func openManager() {
+        panel?.orderOut(nil)
+        panel = nil
+        showManager(preview: nil)
+    }
+
+    // A window listing saved sites: change the profile each one opens in, or remove it.
+    func showManager(preview: String?) {
+        if profiles.isEmpty { profiles = loadProfiles() }
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 380),
+                         styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        w.title = "Finicky Picker — Saved sites"
+        w.isReleasedWhenClosed = false
+        w.delegate = self
+        manager = w
+        reloadManager()
+        w.center()
+
+        if let out = preview {
+            w.appearance = NSAppearance(named: .aqua)
+            w.orderFront(nil)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                let v = w.contentView!
+                if let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) {
+                    v.cacheDisplay(in: v.bounds, to: rep)
+                    try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: out))
+                }
+                NSApp.terminate(nil)
+            }
+            return
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        w.makeKeyAndOrderFront(nil)
+    }
+
+    func reloadManager() {
+        guard let w = manager else { return }
+        let saved = learned().sorted { $0.key < $1.key }
+        let names = profiles.map(\.name)
+
+        let rows = NSStackView()
+        rows.orientation = .vertical
+        rows.alignment = .leading
+        rows.spacing = 8
+        rows.edgeInsets = NSEdgeInsets(top: 18, left: 20, bottom: 18, right: 20)
+        let note = NSTextField(wrappingLabelWithString: saved.isEmpty
+            ? "No saved sites yet. Tick \"Always open this site this way\" in the picker to save one."
+            : "These sites skip the picker and open straight in the profile shown.")
+        note.font = .systemFont(ofSize: 12)
+        note.textColor = .secondaryLabelColor
+        note.preferredMaxLayoutWidth = 440
+        rows.addArrangedSubview(note)
+        rows.setCustomSpacing(14, after: note)
+
+        for (site, profile) in saved {
+            let id = NSUserInterfaceItemIdentifier(site)
+            let label = NSTextField(labelWithString: site)
+            label.font = .systemFont(ofSize: 13)
+            label.lineBreakMode = .byTruncatingTail
+            label.widthAnchor.constraint(equalToConstant: 200).isActive = true
+            let pop = NSPopUpButton(frame: .zero, pullsDown: false)
+            pop.addItems(withTitles: names)
+            if !names.contains(profile) { pop.addItem(withTitle: profile) }  // a profile that no longer exists
+            pop.selectItem(withTitle: profile)
+            pop.identifier = id
+            pop.target = self
+            pop.action = #selector(changeSaved(_:))
+            let remove = NSButton(title: "Remove", target: self, action: #selector(removeSaved(_:)))
+            remove.bezelStyle = .rounded
+            remove.identifier = id
+            let row = NSStackView(views: [label, pop, remove])
+            row.spacing = 10
+            rows.addArrangedSubview(row)
+        }
+
+        let content = NSView()
+        rows.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(rows)
+        NSLayoutConstraint.activate([
+            rows.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            rows.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            rows.topAnchor.constraint(equalTo: content.topAnchor),
+            rows.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor),
+        ])
+        w.contentView = content
+        w.setContentSize(NSSize(width: 480, height: max(160, rows.fittingSize.height)))
+    }
+
+    @objc func changeSaved(_ sender: NSPopUpButton) {
+        guard let site = sender.identifier?.rawValue, let profile = sender.titleOfSelectedItem else { return }
+        run("/usr/bin/python3", [learnScript, site, profile])
+    }
+
+    @objc func removeSaved(_ sender: NSButton) {
+        guard let site = sender.identifier?.rawValue else { return }
+        run("/usr/bin/python3", [learnScript, "--forget", site])
+        reloadManager()
+    }
+
+    func windowWillClose(_ n: Notification) { NSApp.terminate(nil) }
 
     func choose(_ i: Int) {
         guard profiles.indices.contains(i) else { return }
