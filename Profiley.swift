@@ -15,10 +15,10 @@ let browsers = [
 
 let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
 let finickyConfig = home + "/.finicky.js"
-let storeDir = home + "/Library/Application Support/Finicky Picker"
+let storeDir = home + "/Library/Application Support/Profiley"
 let sitesFile = storeDir + "/sites.json"
 
-// `defaults write social.topc.finicky-picker browser "Google Chrome"`, else the one an old
+// `defaults write com.kamalkhatwani.profiley browser "Google Chrome"`, else the one an old
 // ~/.finicky.js named (`const pickerBrowser = "...";`), else the first one installed.
 let browser: Browser = {
     if let name = UserDefaults.standard.string(forKey: "browser"),
@@ -198,6 +198,10 @@ final class Picker: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         if let i = args.firstIndex(of: "--manage-preview"), i + 1 < args.count {
             showManager(preview: args[i + 1])
+            return
+        }
+        if args.contains("--make-default") {
+            makeDefault { NSApp.terminate(nil) }
             return
         }
         // Opened by hand rather than by a link: show the saved sites.
@@ -392,7 +396,7 @@ final class Picker: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if profiles.isEmpty { profiles = loadProfiles() }
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 380),
                          styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        w.title = "Finicky Picker — Saved sites"
+        w.title = "Profiley — Saved sites"
         w.isReleasedWhenClosed = false
         w.delegate = self
         manager = w
@@ -474,11 +478,11 @@ final class Picker: NSObject, NSApplicationDelegate, NSWindowDelegate {
         rows.addArrangedSubview(addRow)
 
         if !isDefaultBrowser() {
-            let note = NSTextField(wrappingLabelWithString: "Finicky Picker isn't your default browser yet, so links from other apps won't come here.")
+            let note = NSTextField(wrappingLabelWithString: "Profiley isn't your default browser yet, so links from other apps won't come here.")
             note.font = .systemFont(ofSize: 12)
             note.textColor = .secondaryLabelColor
             note.preferredMaxLayoutWidth = 440
-            let make = NSButton(title: "Make default browser", target: self, action: #selector(makeDefault))
+            let make = NSButton(title: "Make default browser", target: self, action: #selector(makeDefaultPressed))
             make.bezelStyle = .rounded
             rows.setCustomSpacing(20, after: addRow)
             rows.addArrangedSubview(note)
@@ -524,13 +528,16 @@ final class Picker: NSObject, NSApplicationDelegate, NSWindowDelegate {
         reloadManager()
     }
 
-    @objc func makeDefault() {
-        guard #available(macOS 12.0, *) else { return }
+    @objc func makeDefaultPressed() { makeDefault { self.reloadManager() } }
+
+    // macOS asks the user to confirm before the change takes effect.
+    func makeDefault(then done: @escaping () -> Void) {
+        guard #available(macOS 12.0, *) else { return done() }
         let ws = NSWorkspace.shared, me = Bundle.main.bundleURL
-        // macOS asks the user to confirm; the window refreshes once both schemes are ours.
-        ws.setDefaultApplication(at: me, toOpenURLsWithScheme: "http") { _ in
+        ws.setDefaultApplication(at: me, toOpenURLsWithScheme: "http") { e in
+            if let e { NSLog("Couldn't become the default browser: %@", e.localizedDescription) }
             ws.setDefaultApplication(at: me, toOpenURLsWithScheme: "https") { _ in
-                DispatchQueue.main.async { self.reloadManager() }
+                DispatchQueue.main.async(execute: done)
             }
         }
     }

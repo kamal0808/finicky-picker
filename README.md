@@ -1,13 +1,13 @@
-# Finicky Picker
+# Profiley
 
-On a Mac, links from Slack, WhatsApp, Claude and other apps open in whichever browser profile is in front, not the one they belong to. Finicky Picker becomes your default browser and sends each link to the right profile: sites you've saved open straight in theirs, and anything else asks you.
+On a Mac, links from Slack, WhatsApp, Claude and other apps open in whichever browser profile is in front, not the one they belong to. Profiley becomes your default browser and sends each link to the right profile: sites you've saved open straight in theirs, and anything else asks you.
 
 ![The picker](docs/picker.png)
 
 - A link from another app shows your profiles, with the same avatars as your browser. Click one or press 1, 2, 3.
 - Tick "Always open this site this way" and that site skips the popup from then on. A saved site covers its subdomains too, so `example.com` also catches `app.example.com`. Leave it unticked for sites you use in several profiles, like github.com.
 - Hold Option while clicking a link to get the popup anyway, to pick a different profile or press Forget on a saved site.
-- Open Finicky Picker from Spotlight (or press "Saved sites…" in the popup) to see every saved site, change which profile it opens in, remove it, or add one by hand.
+- Open Profiley from Spotlight (or press "Saved sites…" in the popup) to see every saved site, change which profile it opens in, remove it, or add one by hand.
 
 Works with Comet and Google Chrome.
 
@@ -24,11 +24,11 @@ cd finicky-picker
 
 The Saved sites window opens; press "Make default browser" and confirm. You can also pick it in System Settings → Desktop & Dock → Default web browser.
 
-Saved sites live in `~/Library/Application Support/Finicky Picker/sites.json`.
+Saved sites live in `~/Library/Application Support/Profiley/sites.json`.
 
 ### Coming from Finicky
 
-If you used the older Finicky-based version, the first launch copies the sites from the `learned` block of `~/.finicky.js`. Add any other rules by hand in the Saved sites window. Once Finicky Picker is your default browser, quit Finicky and remove it (`brew uninstall --cask finicky`, or drag it to the Trash) and `~/.finicky.js`.
+If you used the older Finicky-based version (Finicky Picker), the first launch copies the sites from the `learned` block of `~/.finicky.js`. Add any other rules by hand in the Saved sites window. Once Profiley is your default browser, quit Finicky and remove it (`brew uninstall --cask finicky`, or drag it to the Trash) and `~/.finicky.js`.
 
 ## Known limits
 
