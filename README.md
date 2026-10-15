@@ -16,8 +16,8 @@ Works with Comet and Google Chrome.
 Needs macOS 12 or later with the Xcode command line tools (`xcode-select --install`):
 
 ```sh
-git clone https://github.com/kamal0808/finicky-picker
-cd finicky-picker
+git clone https://github.com/kamal0808/profiley
+cd profiley
 ./install.sh                          # uses Comet if installed, else Chrome
 ./install.sh --browser "Google Chrome"  # or pick one
 ```
